@@ -279,7 +279,7 @@ format_job_get(struct format_tree *ft, const char *cmd)
 		fj->cmd = xstrdup(cmd);
 		fj->expanded = NULL;
 
-		xasprintf(&fj->out, "<'%s' not ready>", fj->cmd);
+		xasprintf(&fj->out, "???", fj->cmd);
 
 		RB_INSERT(format_job_tree, jobs, fj);
 	}
