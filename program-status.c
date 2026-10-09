@@ -18,6 +18,7 @@
 
 #include <sys/types.h>
 
+#include <resolv.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -37,6 +38,10 @@
 #define PROGRAM_STATUS_MAX_ID 128
 #define PROGRAM_STATUS_MAX_SEGMENT 32
 #define PROGRAM_STATUS_MAX_DEPTH 8
+#define PROGRAM_STATUS_MAX_TITLE_ENCODED 256
+#define PROGRAM_STATUS_MAX_TITLE 192
+#define PROGRAM_STATUS_MAX_MSG_ENCODED 2732
+#define PROGRAM_STATUS_MAX_MSG 2048
 #define PROGRAM_STATUS_MAX_RECORDS 256
 
 static const char *program_status_states[] = {
@@ -238,6 +243,57 @@ program_status_valid_id(const char *id)
 }
 
 /*
+ * Decode a base64 value of at most maxenc encoded and maxdec decoded bytes,
+ * rejecting control characters. Returns NULL if the value is invalid or
+ * empty (*bad is set only when invalid).
+ */
+static char *
+program_status_decode(const char *value, size_t maxenc, size_t maxdec,
+    int *bad)
+{
+	size_t	 len = strlen(value), i;
+	char	*padded;
+	u_char	*out;
+	int	 outlen;
+
+	*bad = 0;
+	if (len == 0)
+		return (NULL);
+	if (len > maxenc) {
+		*bad = 1;
+		return (NULL);
+	}
+
+	/* Padding is optional in the protocol but not for b64_pton. */
+	padded = xmalloc(len + 4);
+	strlcpy(padded, value, len + 4);
+	while (strlen(padded) % 4 != 0)
+		strlcat(padded, "=", len + 4);
+
+	out = xmalloc(len + 1);
+	outlen = b64_pton(padded, out, len + 1);
+	free(padded);
+	if (outlen == -1 || (size_t)outlen > maxdec) {
+		free(out);
+		*bad = 1;
+		return (NULL);
+	}
+	for (i = 0; i < (size_t)outlen; i++) {
+		if (out[i] < 0x20 || out[i] == 0x7f) {
+			free(out);
+			*bad = 1;
+			return (NULL);
+		}
+	}
+	if (outlen == 0) {
+		free(out);
+		return (NULL);
+	}
+	out[outlen] = '\0';
+	return ((char *)out);
+}
+
+/*
  * Parse a report body into ps. Returns 0 and a record the caller must free
  * with program_status_free, or -1 if the report must be discarded.
  */
@@ -247,9 +303,11 @@ program_status_parse(const char *body, struct program_status *ps)
 	char		*copy, *next, *pair, *value;
 	const char	*state = NULL, *id = NULL, *kind = NULL;
 	const char	*progress = NULL, *app = NULL;
+	const char	*title = NULL, *msg = NULL;
 	const char	*errstr;
 	u_int		 i;
 	long long	 n;
+	int		 bad;
 
 	memset(ps, 0, sizeof *ps);
 	ps->progress = -1;
@@ -277,6 +335,10 @@ program_status_parse(const char *body, struct program_status *ps)
 			progress = value;
 		else if (strcmp(pair, "app") == 0)
 			app = value;
+		else if (strcmp(pair, "title") == 0)
+			title = value;
+		else if (strcmp(pair, "msg") == 0)
+			msg = value;
 	}
 
 	if (state == NULL)
@@ -298,6 +360,20 @@ program_status_parse(const char *body, struct program_status *ps)
 		if (strlen(app) > PROGRAM_STATUS_MAX_APP)
 			goto bad;
 		ps->app = xstrdup(app);
+	}
+	if (title != NULL) {
+		ps->title = program_status_decode(title,
+		    PROGRAM_STATUS_MAX_TITLE_ENCODED, PROGRAM_STATUS_MAX_TITLE,
+		    &bad);
+		if (bad)
+			goto bad;
+	}
+	if (msg != NULL) {
+		ps->msg = program_status_decode(msg,
+		    PROGRAM_STATUS_MAX_MSG_ENCODED, PROGRAM_STATUS_MAX_MSG,
+		    &bad);
+		if (bad)
+			goto bad;
 	}
 
 	if (ps->state == PROGRAM_STATUS_BLOCKED && kind != NULL) {

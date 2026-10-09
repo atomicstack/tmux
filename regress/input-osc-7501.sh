@@ -120,5 +120,39 @@ start_cmd cap 40 5 "$cmd"
 sleep 0.5
 check_format cap '#{pane_program_count}' '256'
 
+# msg and title are base64; padding is optional.
+start_pane msg 40 5 \
+    '\033]7501;state=done:msg=QXBwbHkgMyB0byBhZGQ=:title=ZGVwbG95\033\\X\n'
+check_format msg '#{pane_program_msg}' 'Apply 3 to add'
+check_format msg '#{pane_program_title}' 'deploy'
+start_pane unpadded 40 5 '\033]7501;state=done:msg=QXBwbHk\033\\X\n'
+check_format unpadded '#{pane_program_msg}' 'Apply'
+
+# An empty msg is absent, not an error.
+start_pane emptymsg 40 5 '\033]7501;state=done:msg=\033\\X\n'
+check_format emptymsg '#{pane_program_state}' 'done'
+check_format emptymsg '#{pane_program_msg}' ''
+
+# A control character in the decoded text discards the whole report
+# ("a\nb" is YQpi; "a\x7fb" is YX9i), as does base64 that does not
+# decode (a single character cannot form a byte).
+start_pane ctrl 40 5 \
+    '\033]7501;state=working\033\\\033]7501;state=done:msg=YQpi\033\\\033]7501;state=done:msg=YX9i\033\\\033]7501;state=done:msg=A\033\\X\n'
+check_format ctrl '#{pane_program_state}' 'working'
+
+# UTF-8 survives decoding ("héllo" is aMOpbGxv).
+start_pane utf8 40 5 '\033]7501;state=done:msg=aMOpbGxv\033\\X\n'
+check_format utf8 '#{pane_program_msg}' 'héllo'
+
+# Over the limits: a title of 260 encoded bytes and a body over 4096
+# bytes are both discarded (an unknown key, so that only the body limit
+# can reject it).
+t=$(printf 'A%.0s' $(seq 1 260))
+start_pane longtitle 40 5 "\\033]7501;state=done:title=$t\\033\\\\X\\n"
+check_format longtitle '#{pane_program_count}' '0'
+m=$(printf 'A%.0s' $(seq 1 4100))
+start_pane longbody 40 5 "\\033]7501;state=done:junk=$m\\033\\\\X\\n"
+check_format longbody '#{pane_program_count}' '0'
+
 $TMUX kill-server 2>/dev/null
 exit $exit_status
