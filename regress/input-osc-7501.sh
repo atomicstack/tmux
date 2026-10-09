@@ -154,5 +154,37 @@ m=$(printf 'A%.0s' $(seq 1 4100))
 start_pane longbody 40 5 "\\033]7501;state=done:junk=$m\\033\\\\X\\n"
 check_format longbody '#{pane_program_count}' '0'
 
+# An OSC 133 A prompt drops working and blocked but keeps done and error.
+start_pane prompt 40 5 \
+    '\033]7501;state=working:id=w\033\\\033]7501;state=blocked:id=b\033\\\033]7501;state=done\033\\\033]7501;state=error:id=e\033\\\033]133;A\033\\X\n'
+check_format prompt '#{pane_program_count}' '2'
+check_format prompt '#{pane_program_state}' 'done'
+
+# RIS removes everything.
+start_pane ris 40 5 \
+    '\033]7501;state=done\033\\\033]7501;state=error:id=e\033\\\033cX\n'
+check_format ris '#{pane_program_count}' '0'
+
+# DECSTR does not.
+start_pane decstr 40 5 '\033]7501;state=working\033\\\033[!pX\n'
+check_format decstr '#{pane_program_state}' 'working'
+
+# Process exit drops working but keeps done (remain-on-exit keeps the
+# pane around so the formats can be read).
+$TMUX kill-server 2>/dev/null
+sleep 0.1
+$TMUX new-session -d -x 40 -y 5 -s exited \
+    "printf '\\033]7501;state=working:id=w\\033\\\\\\033]7501;state=done\\033\\\\'; sleep 0.3" || exit 1
+$TMUX set-option -t exited: remain-on-exit on || exit 1
+sleep 1
+check_format exited '#{pane_dead}' '1'
+check_format exited '#{pane_program_count}' '1'
+check_format exited '#{pane_program_state}' 'done'
+
+# Respawn starts from no records.
+$TMUX respawn-pane -k -t exited: "printf X; $INPUT_HOLD" || exit 1
+sleep 0.3
+check_format exited '#{pane_program_count}' '0'
+
 $TMUX kill-server 2>/dev/null
 exit $exit_status

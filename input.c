@@ -1424,6 +1424,8 @@ input_esc_dispatch(struct input_ctx *ictx)
 	switch (entry->type) {
 	case INPUT_ESC_RIS:
 		colour_palette_clear(ictx->palette);
+		if (ictx->wp != NULL)
+			program_status_free_all(ictx->wp);
 		input_reset_cell(ictx);
 		screen_write_reset(sctx);
 		screen_write_fullredraw(sctx);
@@ -3418,6 +3420,7 @@ input_osc_133(struct input_ctx *ictx, const char *p)
 			gl->flags |= GRID_LINE_START_PROMPT;
 		}
 		if (wp != NULL) {
+			program_status_prompt(wp);
 			wp->last_prompt_time = time(NULL);
 			events_fire_pane("pane-shell-prompt", wp);
 		}
