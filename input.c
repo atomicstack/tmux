@@ -3485,6 +3485,14 @@ input_osc_7501(struct input_ctx *ictx, const char *p)
 	    !options_get_number(wp->options, "allow-program-status"))
 		return;
 
+	if (strcmp(p, "?") == 0) {
+		if (ictx->input_end == INPUT_END_BEL)
+			input_reply(ictx, 1, "\033]7501;?\007");
+		else
+			input_reply(ictx, 1, "\033]7501;?\033\\");
+		return;
+	}
+
 	if (program_status_parse(p, &ps) != 0) {
 		log_debug("bad OSC 7501 %s", p);
 		return;

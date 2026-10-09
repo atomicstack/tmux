@@ -186,5 +186,36 @@ $TMUX respawn-pane -k -t exited: "printf X; $INPUT_HOLD" || exit 1
 sleep 0.3
 check_format exited '#{pane_program_count}' '0'
 
+# The feature query is answered with the same body and terminator; with
+# the option off there is no reply and reports are ignored.
+query()
+{
+	name=$1
+	expected=$2
+	seq=$3
+	count=$4
+
+	$TMUX kill-server 2>/dev/null
+	sleep 0.1
+	$TMUX new-session -d -x 40 -y 5 -s "$name" \
+	    "stty raw -echo min 0 time 10; printf '$seq'; dd bs=1 count=$count 2>/dev/null | cat -v >$TMP; $INPUT_HOLD" || exit 1
+	sleep 1.5
+	printf '%s' "$expected" >"$EXP"
+	cmp -s "$TMP" "$EXP" || fail "$name"
+}
+query query-st '^[]7501;?^[\' '\033]7501;?\033\\' 11
+query query-bel '^[]7501;?^G' '\033]7501;?\007' 10
+
+$TMUX kill-server 2>/dev/null
+sleep 0.1
+$TMUX new-session -d -x 40 -y 5 -s off "$INPUT_HOLD" || exit 1
+$TMUX set-option -g allow-program-status off || exit 1
+$TMUX respawn-pane -k -t off: \
+    "stty raw -echo min 0 time 10; printf '\\033]7501;?\\033\\\\\\033]7501;state=working\\033\\\\'; dd bs=1 count=11 2>/dev/null | cat -v >$TMP; $INPUT_HOLD" || exit 1
+sleep 1.5
+printf '' >"$EXP"
+cmp -s "$TMP" "$EXP" || fail "off-no-reply"
+check_format off '#{pane_program_state}' ''
+
 $TMUX kill-server 2>/dev/null
 exit $exit_status
