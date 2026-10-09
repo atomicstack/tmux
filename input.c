@@ -178,6 +178,7 @@ static void	input_osc_110(struct input_ctx *, const char *);
 static void	input_osc_111(struct input_ctx *, const char *);
 static void	input_osc_112(struct input_ctx *, const char *);
 static void	input_osc_133(struct input_ctx *, const char *);
+static void	input_osc_7501(struct input_ctx *, const char *);
 
 /* Transition entry/exit handlers. */
 static void	input_clear(struct input_ctx *);
@@ -2788,6 +2789,9 @@ input_exit_osc(struct input_ctx *ictx)
 	case 133:
 		input_osc_133(ictx, p);
 		break;
+	case 7501:
+		input_osc_7501(ictx, p);
+		break;
 	default:
 		log_debug("%s: unknown '%u'", __func__, option);
 		break;
@@ -3465,6 +3469,28 @@ input_osc_133(struct input_ctx *ictx, const char *p)
 		}
 		break;
 	}
+}
+
+/* Handle the OSC 7501 program status sequence. */
+static void
+input_osc_7501(struct input_ctx *ictx, const char *p)
+{
+	struct window_pane	*wp = ictx->wp;
+	struct program_status	 ps;
+
+	if (wp == NULL ||
+	    !options_get_number(wp->options, "allow-program-status"))
+		return;
+
+	if (program_status_parse(p, &ps) != 0) {
+		log_debug("bad OSC 7501 %s", p);
+		return;
+	}
+	if (program_status_apply(wp, &ps)) {
+		server_redraw_window_borders(wp->window);
+		server_status_window(wp->window);
+	}
+	program_status_free(&ps);
 }
 
 /* Handle OSC 52 reply. */

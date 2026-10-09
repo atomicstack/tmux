@@ -1112,6 +1112,35 @@ struct progress_bar {
 	int			progress;
 };
 
+/* Program status, OSC 7501. */
+enum program_status_state {
+	PROGRAM_STATUS_IDLE,
+	PROGRAM_STATUS_WORKING,
+	PROGRAM_STATUS_DONE,
+	PROGRAM_STATUS_BLOCKED,
+	PROGRAM_STATUS_ERROR,
+	PROGRAM_STATUS_CLEAR
+};
+enum program_status_kind {
+	PROGRAM_STATUS_KIND_NONE,
+	PROGRAM_STATUS_KIND_PERMISSION,
+	PROGRAM_STATUS_KIND_QUESTION,
+	PROGRAM_STATUS_KIND_AUTH
+};
+struct program_status {
+	char				*id;
+	enum program_status_state	 state;
+	enum program_status_kind	 kind;
+	int				 progress;
+	char				*app;
+	char				*title;
+	char				*msg;
+	time_t				 time;
+
+	TAILQ_ENTRY(program_status)	 entry;
+};
+TAILQ_HEAD(program_statuses, program_status);
+
 /* Virtual screen. */
 struct screen_sel;
 struct screen_titles;
@@ -1419,6 +1448,9 @@ struct window_pane {
 	time_t		 cmd_end_time;
 	int		 cmd_status;
 	char		*cmd_line;
+
+	struct program_statuses program_statuses;
+	u_int		 program_status_count;
 
 	int		 fd;
 	struct bufferevent *event;
@@ -3787,6 +3819,21 @@ int	 screen_alternate_on(struct screen *, struct grid_cell *, int);
 int	 screen_alternate_off(struct screen *, struct grid_cell *, int);
 const char *screen_mode_to_string(int);
 const char *screen_print(struct screen *, int);
+
+/* program-status.c */
+void		 program_status_init(struct window_pane *);
+void		 program_status_free(struct program_status *);
+void		 program_status_free_all(struct window_pane *);
+struct program_status *program_status_find(struct window_pane *,
+		     const char *);
+int		 program_status_parse(const char *, struct program_status *);
+int		 program_status_apply(struct window_pane *,
+		     const struct program_status *);
+void		 program_status_prompt(struct window_pane *);
+const char	*program_status_app(struct window_pane *,
+		     const struct program_status *);
+const char	*program_status_state_name(enum program_status_state);
+const char	*program_status_kind_name(enum program_status_kind);
 
 /* window.c */
 extern struct windows windows;

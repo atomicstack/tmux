@@ -1403,6 +1403,14 @@ const struct options_table_entry options_table[] = {
 		  "is invisible)."
 	},
 
+	{ .name = "allow-program-status",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE,
+	  .default_num = 1,
+	  .text = "Whether applications are allowed to use the OSC 7501 "
+		  "escape sequence to report program status."
+	},
+
 	{ .name = "allow-rename",
 	  .type = OPTIONS_TABLE_FLAG,
 	  .scope = OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE,

@@ -1477,6 +1477,7 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
 	wp->fd = -1;
 
 	TAILQ_INIT(&wp->modes);
+	program_status_init(wp);
 
 	TAILQ_INIT (&wp->resize_queue);
 
@@ -1683,6 +1684,7 @@ window_pane_free(struct window_pane *wp)
 	free(wp->searchstr);
 	free(wp->cmd_line);
 	screen_free(&wp->status_screen);
+	program_status_free_all(wp);
 	screen_free(&wp->base);
 	free(wp->r.ranges);
 	options_free(wp->options);

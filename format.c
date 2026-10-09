@@ -2704,6 +2704,100 @@ format_cb_pane_pb_state(struct format_tree *ft)
 	return (NULL);
 }
 
+/* Callback for pane_program_app. */
+static void *
+format_cb_pane_program_app(struct format_tree *ft)
+{
+	struct program_status	*ps;
+	const char		*app;
+
+	if (ft->wp == NULL)
+		return (NULL);
+	ps = program_status_find(ft->wp, NULL);
+	if (ps == NULL || (app = program_status_app(ft->wp, ps)) == NULL)
+		return (xstrdup(""));
+	return (xstrdup(app));
+}
+
+/* Callback for pane_program_count. */
+static void *
+format_cb_pane_program_count(struct format_tree *ft)
+{
+	if (ft->wp == NULL)
+		return (NULL);
+	return (format_printf("%u", ft->wp->program_status_count));
+}
+
+/* Callback for pane_program_kind. */
+static void *
+format_cb_pane_program_kind(struct format_tree *ft)
+{
+	struct program_status	*ps;
+
+	if (ft->wp == NULL)
+		return (NULL);
+	ps = program_status_find(ft->wp, NULL);
+	if (ps == NULL)
+		return (xstrdup(""));
+	return (xstrdup(program_status_kind_name(ps->kind)));
+}
+
+/* Callback for pane_program_msg. */
+static void *
+format_cb_pane_program_msg(struct format_tree *ft)
+{
+	struct program_status	*ps;
+
+	if (ft->wp == NULL)
+		return (NULL);
+	ps = program_status_find(ft->wp, NULL);
+	if (ps == NULL || ps->msg == NULL)
+		return (xstrdup(""));
+	return (xstrdup(ps->msg));
+}
+
+/* Callback for pane_program_progress. */
+static void *
+format_cb_pane_program_progress(struct format_tree *ft)
+{
+	struct program_status	*ps;
+
+	if (ft->wp == NULL)
+		return (NULL);
+	ps = program_status_find(ft->wp, NULL);
+	if (ps == NULL || ps->progress == -1)
+		return (xstrdup(""));
+	return (format_printf("%d", ps->progress));
+}
+
+/* Callback for pane_program_state. */
+static void *
+format_cb_pane_program_state(struct format_tree *ft)
+{
+	struct program_status	*ps;
+
+	if (ft->wp == NULL)
+		return (NULL);
+	ps = program_status_find(ft->wp, NULL);
+	if (ps == NULL)
+		return (xstrdup(""));
+	return (xstrdup(program_status_state_name(ps->state)));
+}
+
+/* Callback for pane_program_title. */
+static void *
+format_cb_pane_program_title(struct format_tree *ft)
+{
+	struct program_status	*ps;
+
+	if (ft->wp == NULL)
+		return (NULL);
+	ps = program_status_find(ft->wp, NULL);
+	if (ps == NULL || ps->title == NULL)
+		return (xstrdup(""));
+	return (xstrdup(ps->title));
+}
+
 /* Callback for pane_right. */
 static void *
 format_cb_pane_right(struct format_tree *ft)
@@ -4024,6 +4118,27 @@ static const struct format_table_entry format_table[] = {
 	},
 	{ "pane_private_modes", FORMAT_TABLE_STRING,
 	  format_cb_pane_private_modes
+	},
+	{ "pane_program_app", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_app
+	},
+	{ "pane_program_count", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_count
+	},
+	{ "pane_program_kind", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_kind
+	},
+	{ "pane_program_msg", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_msg
+	},
+	{ "pane_program_progress", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_progress
+	},
+	{ "pane_program_state", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_state
+	},
+	{ "pane_program_title", FORMAT_TABLE_STRING,
+	  format_cb_pane_program_title
 	},
 	{ "pane_right", FORMAT_TABLE_STRING,
 	  format_cb_pane_right
