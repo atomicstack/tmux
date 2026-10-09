@@ -244,15 +244,16 @@ program_status_valid_id(const char *id)
 
 /*
  * Decode a base64 value of at most maxenc encoded and maxdec decoded bytes,
- * rejecting control characters. Returns NULL if the value is invalid or
- * empty (*bad is set only when invalid).
+ * rejecting control characters and invalid UTF-8 and neutering "#(" as for
+ * titles. Returns NULL if the value is invalid or empty (*bad is set only
+ * when invalid).
  */
 static char *
 program_status_decode(const char *value, size_t maxenc, size_t maxdec,
     int *bad)
 {
 	size_t	 len = strlen(value), i;
-	char	*padded;
+	char	*padded, *clean;
 	u_char	*out;
 	int	 outlen;
 
@@ -290,7 +291,12 @@ program_status_decode(const char *value, size_t maxenc, size_t maxdec,
 		return (NULL);
 	}
 	out[outlen] = '\0';
-	return ((char *)out);
+
+	clean = clean_name((char *)out, 1);
+	free(out);
+	if (clean == NULL)
+		*bad = 1;
+	return (clean);
 }
 
 /*

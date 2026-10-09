@@ -144,6 +144,16 @@ check_format ctrl '#{pane_program_state}' 'working'
 start_pane utf8 40 5 '\033]7501;state=done:msg=aMOpbGxv\033\\X\n'
 check_format utf8 '#{pane_program_msg}' 'héllo'
 
+# Decoded text gets the same treatment as titles: invalid UTF-8 (a lone
+# 0xff is /w==) and C1 bytes ("a\x9bb" is YZti) discard the report, and
+# "#(" ("#(echo hi)" is IyhlY2hvIGhpKQ==) is neutered rather than left for
+# #{E:} to run.
+start_pane sanitise 40 5 \
+    '\033]7501;state=working\033\\\033]7501;state=done:msg=/w==\033\\\033]7501;state=done:title=YZti\033\\X\n'
+check_format sanitise '#{pane_program_state}' 'working'
+start_pane hash 40 5 '\033]7501;state=done:msg=IyhlY2hvIGhpKQ==\033\\X\n'
+check_format hash '#{pane_program_msg}' '_(echo hi)'
+
 # Over the limits: a title of 260 encoded bytes and a body over 4096
 # bytes are both discarded (an unknown key, so that only the body limit
 # can reject it).
@@ -169,22 +179,42 @@ check_format ris '#{pane_program_count}' '0'
 start_pane decstr 40 5 '\033]7501;state=working\033\\\033[!pX\n'
 check_format decstr '#{pane_program_state}' 'working'
 
-# Process exit drops working but keeps done (remain-on-exit keeps the
-# pane around so the formats can be read).
-$TMUX kill-server 2>/dev/null
-sleep 0.1
-$TMUX new-session -d -x 40 -y 5 -s exited \
-    "printf '\\033]7501;state=working:id=w\\033\\\\\\033]7501;state=done\\033\\\\'; sleep 0.3" || exit 1
-$TMUX set-option -t exited: remain-on-exit on || exit 1
-sleep 1
+# Process exit drops working but keeps done (remain-on-exit is set
+# globally before the pane is created so it is in force when the process
+# exits, and keeps the pane around so the formats can be read).
+start_exited()
+{
+	name=$1
+	cmd=$2
+
+	$TMUX kill-server 2>/dev/null
+	sleep 0.1
+	$TMUX new-session -d -x 1 -y 1 -s test-setup "$INPUT_HOLD" || exit 1
+	$TMUX set-option -g remain-on-exit on || exit 1
+	$TMUX new-session -d -x 40 -y 5 -s "$name" "$cmd" || exit 1
+	$TMUX kill-session -t test-setup
+	sleep 1
+}
+start_exited exited \
+    "printf '\\033]7501;state=working:id=w\\033\\\\\\033]7501;state=done\\033\\\\'; sleep 0.3"
 check_format exited '#{pane_dead}' '1'
 check_format exited '#{pane_program_count}' '1'
 check_format exited '#{pane_program_state}' 'done'
 
+# The same when the process exits but a grandchild keeps the pty open, so
+# tmux learns of the exit from SIGCHLD rather than from EOF on the pty
+# (on BSD and macOS the tty is revoked when the session leader exits, so
+# there EOF arrives anyway and this only checks the result).
+start_exited grandchild \
+    "printf '\\033]7501;state=working\\033\\\\\\033]7501;state=done:id=d\\033\\\\'; (trap '' HUP; sleep 5) & sleep 0.2; exit 0"
+check_format grandchild '#{pane_dead}' '1'
+check_format grandchild '#{pane_program_count}' '1'
+check_format grandchild '#{pane_program_state}' ''
+
 # Respawn starts from no records.
-$TMUX respawn-pane -k -t exited: "printf X; $INPUT_HOLD" || exit 1
+$TMUX respawn-pane -k -t grandchild: "printf X; $INPUT_HOLD" || exit 1
 sleep 0.3
-check_format exited '#{pane_program_count}' '0'
+check_format grandchild '#{pane_program_count}' '0'
 
 # The feature query is answered with the same body and terminator; with
 # the option off there is no reply and reports are ignored.
