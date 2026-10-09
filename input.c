@@ -3397,6 +3397,52 @@ input_fire_command_event(struct window_pane *wp, const char *name)
 	events_fire(name, ep);
 }
 
+/* Fire an OSC 7501 program status event. */
+static void
+input_fire_program_status_event(struct window_pane *wp,
+    const struct program_status *ps)
+{
+	struct event_payload	*ep;
+	struct cmd_find_state	 fs;
+	const char		*app;
+
+	ep = event_payload_create();
+	cmd_find_from_pane(&fs, wp, 0);
+	event_payload_set_target(ep, &fs);
+	if (fs.s != NULL)
+		event_payload_set_session(ep, "session", fs.s);
+	if (fs.wl != NULL)
+		event_payload_set_int(ep, "window_index", fs.wl->idx);
+	event_payload_set_window(ep, "window", wp->window);
+	event_payload_set_pane(ep, "pane", wp);
+
+	event_payload_set_string(ep, "program_state", "%s",
+	    program_status_state_name(ps->state));
+	if (ps->id != NULL)
+		event_payload_set_string(ep, "program_id", "%s", ps->id);
+	if (ps->state != PROGRAM_STATUS_CLEAR) {
+		if (ps->kind != PROGRAM_STATUS_KIND_NONE) {
+			event_payload_set_string(ep, "program_kind", "%s",
+			    program_status_kind_name(ps->kind));
+		}
+		if (ps->progress != -1) {
+			event_payload_set_int(ep, "program_progress",
+			    ps->progress);
+		}
+		app = program_status_app(wp, ps);
+		if (app != NULL)
+			event_payload_set_string(ep, "program_app", "%s", app);
+		if (ps->title != NULL) {
+			event_payload_set_string(ep, "program_title", "%s",
+			    ps->title);
+		}
+		if (ps->msg != NULL)
+			event_payload_set_string(ep, "program_msg", "%s", ps->msg);
+	}
+
+	events_fire("pane-program-status", ep);
+}
+
 /* Handle the OSC 133 sequence. */
 static void
 input_osc_133(struct input_ctx *ictx, const char *p)
@@ -3498,6 +3544,7 @@ input_osc_7501(struct input_ctx *ictx, const char *p)
 		return;
 	}
 	if (program_status_apply(wp, &ps)) {
+		input_fire_program_status_event(wp, &ps);
 		server_redraw_window_borders(wp->window);
 		server_status_window(wp->window);
 	}

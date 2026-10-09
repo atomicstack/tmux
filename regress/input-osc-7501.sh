@@ -217,5 +217,20 @@ printf '' >"$EXP"
 cmp -s "$TMP" "$EXP" || fail "off-no-reply"
 check_format off '#{pane_program_state}' ''
 
+# The pane-program-status hook runs for every applied report, including
+# clear, with the payload exposed as hook_program_* formats.
+$TMUX kill-server 2>/dev/null
+sleep 0.1
+$TMUX new-session -d -x 40 -y 5 -s hook "$INPUT_HOLD" || exit 1
+$TMUX set -g @log '' || exit 1
+$TMUX set-hook -g pane-program-status \
+    'set -gF @log "#{@log}|#{hook_program_state}:#{hook_program_kind}:#{hook_program_progress}:#{hook_program_app}:#{hook_program_msg}:#{hook_program_id}"' || exit 1
+$TMUX respawn-pane -k -t hook: \
+    "printf '\\033]7501;state=blocked:kind=auth:progress=5:app=cc:msg=aGk=:id=x\\033\\\\\\033]7501;state=snoozing\\033\\\\\\033]7501;state=clear:id=x\\033\\\\'; $INPUT_HOLD" || exit 1
+sleep 0.5
+printf '%s\n' '|blocked:auth:5:cc:hi:x|clear:::::x' >"$EXP"
+$TMUX display-message -p '#{@log}' >"$TMP" 2>&1
+cmp -s "$EXP" "$TMP" || fail "hook"
+
 $TMUX kill-server 2>/dev/null
 exit $exit_status
