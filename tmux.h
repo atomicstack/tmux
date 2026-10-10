@@ -1135,7 +1135,6 @@ struct program_status {
 	char				*app;
 	char				*title;
 	char				*msg;
-	time_t				 time;
 
 	TAILQ_ENTRY(program_status)	 entry;
 };

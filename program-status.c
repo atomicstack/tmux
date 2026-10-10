@@ -21,7 +21,6 @@
 #include <resolv.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "tmux.h"
 
@@ -29,10 +28,18 @@
  * OSC 7501 program status. Programs report a state (and optionally an id,
  * kind, progress, app, title and message) and tmux keeps one record per id
  * on the pane. See https://www.superlogical.com/rex/docs/build/program-status.
+ *
+ * The record list is kept in least recently updated order (oldest first), so
+ * that the record to evict when the cap is reached is always at the head.
  */
 
-/* Limits from the specification. */
-#define PROGRAM_STATUS_MAX_BODY 4096
+/*
+ * Limits from the specification. The sequence limit covers the whole
+ * sequence, so the body gets 9 bytes less for the OSC ("\033]7501;") and
+ * ST ("\033\\").
+ */
+#define PROGRAM_STATUS_MAX_SEQUENCE 4096
+#define PROGRAM_STATUS_MAX_BODY (PROGRAM_STATUS_MAX_SEQUENCE - 9)
 #define PROGRAM_STATUS_MAX_KEY 16
 #define PROGRAM_STATUS_MAX_APP 32
 #define PROGRAM_STATUS_MAX_ID 128
@@ -90,6 +97,23 @@ program_status_free_all(struct window_pane *wp)
 		program_status_remove(wp, ps);
 }
 
+/* Redraw what shows the records after they have changed. */
+static void
+program_status_changed(struct window_pane *wp)
+{
+	server_redraw_window_borders(wp->window);
+	server_status_window(wp->window);
+}
+
+/* Are two ids the same? NULL is the root record. */
+static int
+program_status_same_id(const char *a, const char *b)
+{
+	if (a == NULL || b == NULL)
+		return (a == b);
+	return (strcmp(a, b) == 0);
+}
+
 /* Find a record by id; NULL is the root record. */
 struct program_status *
 program_status_find(struct window_pane *wp, const char *id)
@@ -97,10 +121,7 @@ program_status_find(struct window_pane *wp, const char *id)
 	struct program_status	*ps;
 
 	TAILQ_FOREACH(ps, &wp->program_statuses, entry) {
-		if (id == NULL) {
-			if (ps->id == NULL)
-				return (ps);
-		} else if (ps->id != NULL && strcmp(ps->id, id) == 0)
+		if (program_status_same_id(ps->id, id))
 			return (ps);
 	}
 	return (NULL);
@@ -125,12 +146,17 @@ void
 program_status_prompt(struct window_pane *wp)
 {
 	struct program_status	*ps, *ps1;
+	int			 removed = 0;
 
 	TAILQ_FOREACH_SAFE(ps, &wp->program_statuses, entry, ps1) {
 		if (ps->state == PROGRAM_STATUS_WORKING ||
-		    ps->state == PROGRAM_STATUS_BLOCKED)
+		    ps->state == PROGRAM_STATUS_BLOCKED) {
 			program_status_remove(wp, ps);
+			removed = 1;
+		}
 	}
+	if (removed)
+		program_status_changed(wp);
 }
 
 /* Get the app for a record, inheriting from the nearest ancestor. */
@@ -177,6 +203,23 @@ program_status_kind_name(enum program_status_kind kind)
 	return (program_status_kinds[kind]);
 }
 
+/*
+ * Strip spaces from both ends of a key or value, in place. Only 0x20 can
+ * reach the body: the OSC parser drops the other whitespace bytes.
+ */
+static char *
+program_status_trim(char *s)
+{
+	char	*end;
+
+	while (*s == ' ')
+		s++;
+	end = s + strlen(s);
+	while (end > s && end[-1] == ' ')
+		*--end = '\0';
+	return (s);
+}
+
 /* Is this a valid key: 1-16 bytes of [a-z]? */
 static int
 program_status_valid_key(const char *key)
@@ -192,24 +235,55 @@ program_status_valid_key(const char *key)
 	return (1);
 }
 
-/* Is this a valid value: only [A-Za-z0-9_.,+/=-]? */
+/* Is this a byte from the value set [A-Za-z0-9_.,+/=-]? */
+static int
+program_status_valid_value_byte(char c)
+{
+	return ((c >= 'A' && c <= 'Z') ||
+	    (c >= 'a' && c <= 'z') ||
+	    (c >= '0' && c <= '9') ||
+	    strchr("_.,+/=-", c) != NULL);
+}
+
+/* Is this a valid value: only bytes from the value set? */
 static int
 program_status_valid_value(const char *value)
 {
 	const char	*cp;
 
 	for (cp = value; *cp != '\0'; cp++) {
-		if ((*cp >= 'A' && *cp <= 'Z') ||
-		    (*cp >= 'a' && *cp <= 'z') ||
-		    (*cp >= '0' && *cp <= '9') ||
-		    strchr("_.,+/=-", *cp) != NULL)
-			continue;
-		return (0);
+		if (!program_status_valid_value_byte(*cp))
+			return (0);
 	}
 	return (1);
 }
 
-/* Is this a valid id: segments of 1-32 bytes of [A-Za-z0-9_.+-], 8 deep? */
+/* Is this a byte from the segment (and app) set [A-Za-z0-9_.+-]? */
+static int
+program_status_valid_segment_byte(char c)
+{
+	return ((c >= 'A' && c <= 'Z') ||
+	    (c >= 'a' && c <= 'z') ||
+	    (c >= '0' && c <= '9') ||
+	    strchr("_.+-", c) != NULL);
+}
+
+/* Is this a valid app: 1-32 bytes from the segment set? */
+static int
+program_status_valid_app(const char *app)
+{
+	const char	*cp;
+
+	if (*app == '\0' || strlen(app) > PROGRAM_STATUS_MAX_APP)
+		return (0);
+	for (cp = app; *cp != '\0'; cp++) {
+		if (!program_status_valid_segment_byte(*cp))
+			return (0);
+	}
+	return (1);
+}
+
+/* Is this a valid id: segments of 1-32 bytes from the segment set, 8 deep? */
 static int
 program_status_valid_id(const char *id)
 {
@@ -221,7 +295,8 @@ program_status_valid_id(const char *id)
 		return (0);
 	for (cp = id;; cp++) {
 		if (*cp == '/' || *cp == '\0') {
-			if (segment == 0 || segment > PROGRAM_STATUS_MAX_SEGMENT)
+			if (segment == 0 ||
+			    segment > PROGRAM_STATUS_MAX_SEGMENT)
 				return (0);
 			if (*cp == '\0')
 				break;
@@ -230,31 +305,25 @@ program_status_valid_id(const char *id)
 			segment = 0;
 			continue;
 		}
-		if ((*cp >= 'A' && *cp <= 'Z') ||
-		    (*cp >= 'a' && *cp <= 'z') ||
-		    (*cp >= '0' && *cp <= '9') ||
-		    strchr("_.+-", *cp) != NULL) {
-			segment++;
-			continue;
-		}
-		return (0);
+		if (!program_status_valid_segment_byte(*cp))
+			return (0);
+		segment++;
 	}
 	return (1);
 }
 
 /*
- * Decode a base64 value of at most maxenc encoded and maxdec decoded bytes,
- * rejecting control characters and invalid UTF-8 and neutering "#(" as for
- * titles. Returns NULL if the value is invalid or empty (*bad is set only
- * when invalid).
+ * Decode a base64 value of at most maxenc encoded and maxdec decoded bytes.
+ * The text must be valid UTF-8 with no control characters (C0, DEL or C1)
+ * and "#(" is neutered as for titles so it cannot reach #{E:}. Returns NULL
+ * if the value is invalid or empty (*bad is set only when invalid).
  */
 static char *
 program_status_decode(const char *value, size_t maxenc, size_t maxdec,
     int *bad)
 {
-	size_t	 len = strlen(value), i;
-	char	*padded, *clean;
-	u_char	*out;
+	size_t	 len = strlen(value);
+	char	*padded, *out, *cp;
 	int	 outlen;
 
 	*bad = 0;
@@ -272,31 +341,37 @@ program_status_decode(const char *value, size_t maxenc, size_t maxdec,
 		strlcat(padded, "=", len + 4);
 
 	out = xmalloc(len + 1);
-	outlen = b64_pton(padded, out, len + 1);
+	outlen = b64_pton(padded, (u_char *)out, len + 1);
 	free(padded);
-	if (outlen == -1 || (size_t)outlen > maxdec) {
-		free(out);
-		*bad = 1;
-		return (NULL);
-	}
-	for (i = 0; i < (size_t)outlen; i++) {
-		if (out[i] < 0x20 || out[i] == 0x7f) {
-			free(out);
-			*bad = 1;
-			return (NULL);
-		}
-	}
+	if (outlen == -1 || (size_t)outlen > maxdec)
+		goto bad;
+	out[outlen] = '\0';
 	if (outlen == 0) {
 		free(out);
 		return (NULL);
 	}
-	out[outlen] = '\0';
 
-	clean = clean_name((char *)out, 1);
+	/*
+	 * utf8_isvalid rejects C0 controls, DEL and invalid UTF-8 but stops at
+	 * an embedded NUL (also a control character) and accepts the C1
+	 * controls U+0080 to U+009F, which are 0xc2 followed by 0x80 to 0x9f
+	 * (0xc2 is only ever a lead byte in valid UTF-8).
+	 */
+	if (strlen(out) != (size_t)outlen || !utf8_isvalid(out))
+		goto bad;
+	for (cp = out; *cp != '\0'; cp++) {
+		if ((u_char)cp[0] == 0xc2 &&
+		    (u_char)cp[1] >= 0x80 && (u_char)cp[1] <= 0x9f)
+			goto bad;
+		if (cp[0] == '#' && cp[1] == '(')
+			*cp = '_';
+	}
+	return (out);
+
+bad:
 	free(out);
-	if (clean == NULL)
-		*bad = 1;
-	return (clean);
+	*bad = 1;
+	return (NULL);
 }
 
 /*
@@ -306,7 +381,7 @@ program_status_decode(const char *value, size_t maxenc, size_t maxdec,
 int
 program_status_parse(const char *body, struct program_status *ps)
 {
-	char		*copy, *next, *pair, *value;
+	char		*copy, *next, *pair, *key, *value;
 	const char	*state = NULL, *id = NULL, *kind = NULL;
 	const char	*progress = NULL, *app = NULL;
 	const char	*title = NULL, *msg = NULL;
@@ -328,22 +403,34 @@ program_status_parse(const char *body, struct program_status *ps)
 		if (value == NULL)
 			continue;
 		*value++ = '\0';
-		if (!program_status_valid_key(pair) ||
-		    !program_status_valid_value(value))
+		key = program_status_trim(pair);
+		value = program_status_trim(value);
+		if (!program_status_valid_key(key))
 			continue;
-		if (strcmp(pair, "state") == 0)
-			state = value;
-		else if (strcmp(pair, "id") == 0)
+
+		/*
+		 * A malformed id is not skipped like other malformed pairs,
+		 * since that would make the report address the root record
+		 * instead: it is checked against the id grammar below and
+		 * discards the report.
+		 */
+		if (strcmp(key, "id") == 0) {
 			id = value;
-		else if (strcmp(pair, "kind") == 0)
+			continue;
+		}
+		if (!program_status_valid_value(value))
+			continue;
+		if (strcmp(key, "state") == 0)
+			state = value;
+		else if (strcmp(key, "kind") == 0)
 			kind = value;
-		else if (strcmp(pair, "progress") == 0)
+		else if (strcmp(key, "progress") == 0)
 			progress = value;
-		else if (strcmp(pair, "app") == 0)
+		else if (strcmp(key, "app") == 0)
 			app = value;
-		else if (strcmp(pair, "title") == 0)
+		else if (strcmp(key, "title") == 0)
 			title = value;
-		else if (strcmp(pair, "msg") == 0)
+		else if (strcmp(key, "msg") == 0)
 			msg = value;
 	}
 
@@ -362,10 +449,16 @@ program_status_parse(const char *body, struct program_status *ps)
 			goto bad;
 		ps->id = xstrdup(id);
 	}
-	if (app != NULL && *app != '\0') {
+
+	/*
+	 * An app over the length limit discards the report; one outside the
+	 * character set is treated as absent.
+	 */
+	if (app != NULL) {
 		if (strlen(app) > PROGRAM_STATUS_MAX_APP)
 			goto bad;
-		ps->app = xstrdup(app);
+		if (program_status_valid_app(app))
+			ps->app = xstrdup(app);
 	}
 	if (title != NULL) {
 		ps->title = program_status_decode(title,
@@ -397,7 +490,6 @@ program_status_parse(const char *body, struct program_status *ps)
 			ps->progress = n;
 	}
 
-	ps->time = time(NULL);
 	free(copy);
 	return (0);
 
@@ -407,36 +499,77 @@ bad:
 	return (-1);
 }
 
+/* Are two optional strings the same? */
+static int
+program_status_same_string(const char *a, const char *b)
+{
+	if (a == NULL || b == NULL)
+		return (a == b);
+	return (strcmp(a, b) == 0);
+}
+
+/* Do two records (with the same id) hold the same report? */
+static int
+program_status_same(const struct program_status *a,
+    const struct program_status *b)
+{
+	return (a->state == b->state &&
+	    a->kind == b->kind &&
+	    a->progress == b->progress &&
+	    program_status_same_string(a->app, b->app) &&
+	    program_status_same_string(a->title, b->title) &&
+	    program_status_same_string(a->msg, b->msg));
+}
+
 /*
- * Apply a parsed report to a pane. Returns 1 if the pane changed or 0 if
- * the report was dropped (record cap reached). Strings are copied.
+ * Apply a parsed report to a pane. Returns 1 if a record changed or 0 if
+ * the report left the records as they were (a repeat of the same report, or
+ * a clear that matched nothing). Strings are copied.
  */
 int
 program_status_apply(struct window_pane *wp, const struct program_status *ps)
 {
 	struct program_status	*found, *found1;
+	int			 removed = 0;
 
 	if (ps->state == PROGRAM_STATUS_CLEAR) {
+		if (ps->id == NULL) {
+			removed = (wp->program_status_count != 0);
+			program_status_free_all(wp);
+			return (removed);
+		}
 		TAILQ_FOREACH_SAFE(found, &wp->program_statuses, entry,
 		    found1) {
-			if ((ps->id == NULL && found->id == NULL) ||
-			    (ps->id != NULL && found->id != NULL &&
-			    strcmp(found->id, ps->id) == 0) ||
-			    program_status_is_child(found->id, ps->id))
+			if (program_status_same_id(found->id, ps->id) ||
+			    program_status_is_child(found->id, ps->id)) {
 				program_status_remove(wp, found);
+				removed = 1;
+			}
 		}
-		return (1);
+		return (removed);
 	}
 
+	/*
+	 * An updated record moves to the tail so the head is always the
+	 * least recently updated record, which is the one evicted when a new
+	 * record would exceed the cap.
+	 */
 	found = program_status_find(wp, ps->id);
-	if (found == NULL) {
-		if (wp->program_status_count >= PROGRAM_STATUS_MAX_RECORDS)
+	if (found != NULL) {
+		TAILQ_REMOVE(&wp->program_statuses, found, entry);
+		TAILQ_INSERT_TAIL(&wp->program_statuses, found, entry);
+		if (program_status_same(found, ps))
 			return (0);
+		program_status_free(found);
+	} else {
+		if (wp->program_status_count >= PROGRAM_STATUS_MAX_RECORDS) {
+			program_status_remove(wp,
+			    TAILQ_FIRST(&wp->program_statuses));
+		}
 		found = xcalloc(1, sizeof *found);
 		TAILQ_INSERT_TAIL(&wp->program_statuses, found, entry);
 		wp->program_status_count++;
-	} else
-		program_status_free(found);
+	}
 
 	if (ps->id != NULL)
 		found->id = xstrdup(ps->id);
@@ -449,6 +582,5 @@ program_status_apply(struct window_pane *wp, const struct program_status *ps)
 		found->title = xstrdup(ps->title);
 	if (ps->msg != NULL)
 		found->msg = xstrdup(ps->msg);
-	found->time = ps->time;
 	return (1);
 }

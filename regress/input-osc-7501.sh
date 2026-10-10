@@ -65,6 +65,12 @@ start_pane malformed 40 5 \
 check_format malformed '#{pane_program_state}' 'working'
 check_format malformed '#{pane_program_app}' 'ok'
 
+# Whitespace around keys and values is removed.
+start_pane space 40 5 \
+    '\033]7501; state = working : app = cargo \033\\X\n'
+check_format space '#{pane_program_state}' 'working'
+check_format space '#{pane_program_app}' 'cargo'
+
 # kind only applies to blocked; progress only to working or blocked.
 start_pane blocked 40 5 \
     '\033]7501;state=blocked:kind=permission:progress=10\033\\X\n'
@@ -85,17 +91,26 @@ start_pane longapp 40 5 \
     '\033]7501;state=idle:app=abcdefghijklmnopqrstuvwxyz0123456\033\\X\n'
 check_format longapp '#{pane_program_count}' '0'
 
+# app outside [A-Za-z0-9_.+-] is treated as absent; the report still applies.
+start_pane badapp 40 5 '\033]7501;state=idle:app=a/b\033\\X\n'
+check_format badapp '#{pane_program_state}' 'idle'
+check_format badapp '#{pane_program_app}' ''
+
 # An empty id addresses the root record.
 start_pane emptyid 40 5 '\033]7501;state=idle:id=\033\\X\n'
 check_format emptyid '#{pane_program_state}' 'idle'
 check_format emptyid '#{pane_program_count}' '1'
 
 # Bad ids (empty segment, too deep, a value byte that is not a segment
-# byte) discard the report. (A byte outside the value set, such as '!',
-# makes the pair malformed instead, so the report then addresses the root.)
+# byte, a byte outside the value set) discard the report rather than
+# falling back to the root record.
 start_pane badid 40 5 \
-    '\033]7501;state=idle:id=a//b\033\\\033]7501;state=idle:id=1/2/3/4/5/6/7/8/9\033\\\033]7501;state=idle:id=,\033\\X\n'
+    '\033]7501;state=idle:id=a//b\033\\\033]7501;state=idle:id=1/2/3/4/5/6/7/8/9\033\\\033]7501;state=idle:id=,\033\\\033]7501;state=idle:id=job!1\033\\X\n'
 check_format badid '#{pane_program_count}' '0'
+start_pane badidroot 40 5 \
+    '\033]7501;state=idle\033\\\033]7501;state=working:id=job!1\033\\X\n'
+check_format badidroot '#{pane_program_state}' 'idle'
+check_format badidroot '#{pane_program_count}' '1'
 
 # Children: a/b, a and the root are three records; clearing a removes a
 # and a/b but not ab; clearing with no id removes everything.
@@ -112,13 +127,27 @@ $TMUX respawn-pane -k -t children: \
 sleep 0.3
 check_format children '#{pane_program_count}' '0'
 
-# The 257th distinct record is dropped; existing ones still update.
-cmd='i=0; while [ "$i" -lt 257 ]; do '
+# A record past the cap of 256 evicts the least recently updated one: the
+# root record is written first, so 256 ids push it out and the newest id
+# is kept.
+cmd="printf '\\033]7501;state=idle\\033\\\\'; i=0; while [ \"\$i\" -lt 256 ]; do "
 cmd="${cmd}printf '\\033]7501;state=idle:id=r%d\\033\\\\' \"\$i\"; i=\$((i + 1)); done; "
-cmd="${cmd}printf '\\033]7501;state=done:id=r0\\033\\\\'; $INPUT_HOLD"
+cmd="${cmd}printf '\\033]7501;state=done:id=r255\\033\\\\'; $INPUT_HOLD"
 start_cmd cap 40 5 "$cmd"
 sleep 0.5
 check_format cap '#{pane_program_count}' '256'
+check_format cap '#{pane_program_state}' ''
+
+# Updating a record makes it the most recently used, so it survives the
+# eviction that follows and the oldest id (r0) goes instead; clearing r0
+# afterwards then finds nothing to remove.
+cmd="printf '\\033]7501;state=idle\\033\\\\'; i=0; while [ \"\$i\" -lt 255 ]; do "
+cmd="${cmd}printf '\\033]7501;state=idle:id=r%d\\033\\\\' \"\$i\"; i=\$((i + 1)); done; "
+cmd="${cmd}printf '\\033]7501;state=working\\033\\\\\\033]7501;state=idle:id=r255\\033\\\\\\033]7501;state=clear:id=r0\\033\\\\'; $INPUT_HOLD"
+start_cmd lru 40 5 "$cmd"
+sleep 0.5
+check_format lru '#{pane_program_count}' '256'
+check_format lru '#{pane_program_state}' 'working'
 
 # msg and title are base64; padding is optional.
 start_pane msg 40 5 \
@@ -145,24 +174,33 @@ start_pane utf8 40 5 '\033]7501;state=done:msg=aMOpbGxv\033\\X\n'
 check_format utf8 '#{pane_program_msg}' 'héllo'
 
 # Decoded text gets the same treatment as titles: invalid UTF-8 (a lone
-# 0xff is /w==) and C1 bytes ("a\x9bb" is YZti) discard the report, and
+# 0xff is /w==), a raw C1 byte ("a\x9bb" is YZti) and a C1 code point
+# encoded as UTF-8 ("a" U+009B "b" is YcKbYg==) discard the report, and
 # "#(" ("#(echo hi)" is IyhlY2hvIGhpKQ==) is neutered rather than left for
 # #{E:} to run.
 start_pane sanitise 40 5 \
-    '\033]7501;state=working\033\\\033]7501;state=done:msg=/w==\033\\\033]7501;state=done:title=YZti\033\\X\n'
+    '\033]7501;state=working\033\\\033]7501;state=done:msg=/w==\033\\\033]7501;state=done:title=YZti\033\\\033]7501;state=done:msg=YcKbYg==\033\\X\n'
 check_format sanitise '#{pane_program_state}' 'working'
 start_pane hash 40 5 '\033]7501;state=done:msg=IyhlY2hvIGhpKQ==\033\\X\n'
 check_format hash '#{pane_program_msg}' '_(echo hi)'
 
-# Over the limits: a title of 260 encoded bytes and a body over 4096
-# bytes are both discarded (an unknown key, so that only the body limit
-# can reject it).
+# A backslash is stored as itself, not doubled ("a\b" is YVxi).
+start_pane backslash 40 5 '\033]7501;state=done:msg=YVxi\033\\X\n'
+check_format backslash '#{pane_program_msg}' 'a\b'
+
+# Over the limits: a title of 260 encoded bytes and a sequence over 4096
+# bytes (4088 of body after the 9 bytes of OSC and ST) are both discarded
+# (an unknown key, so that only the limit can reject it); one byte shorter
+# is accepted.
 t=$(printf 'A%.0s' $(seq 1 260))
 start_pane longtitle 40 5 "\\033]7501;state=done:title=$t\\033\\\\X\\n"
 check_format longtitle '#{pane_program_count}' '0'
-m=$(printf 'A%.0s' $(seq 1 4100))
+m=$(printf 'A%.0s' $(seq 1 4072))
 start_pane longbody 40 5 "\\033]7501;state=done:junk=$m\\033\\\\X\\n"
 check_format longbody '#{pane_program_count}' '0'
+m=$(printf 'A%.0s' $(seq 1 4071))
+start_pane maxbody 40 5 "\\033]7501;state=done:junk=$m\\033\\\\X\\n"
+check_format maxbody '#{pane_program_count}' '1'
 
 # An OSC 133 A prompt drops working and blocked but keeps done and error.
 start_pane prompt 40 5 \
@@ -211,10 +249,19 @@ check_format grandchild '#{pane_dead}' '1'
 check_format grandchild '#{pane_program_count}' '1'
 check_format grandchild '#{pane_program_state}' ''
 
+# A working report still in the pty when SIGCHLD arrives must not be
+# stored against the dead pane. The process exits as soon as it has
+# written, but the pty data is nearly always readable before the exit is
+# seen, so this checks the outcome without being able to force the race.
+start_exited race \
+    "printf '\\033]7501;state=working\\033\\\\'; (trap '' HUP; sleep 5) & exit 0"
+check_format race '#{pane_dead}' '1'
+check_format race '#{pane_program_state}' ''
+
 # Respawn starts from no records.
-$TMUX respawn-pane -k -t grandchild: "printf X; $INPUT_HOLD" || exit 1
+$TMUX respawn-pane -k -t race: "printf X; $INPUT_HOLD" || exit 1
 sleep 0.3
-check_format grandchild '#{pane_program_count}' '0'
+check_format race '#{pane_program_count}' '0'
 
 # The feature query is answered with the same body and terminator; with
 # the option off there is no reply and reports are ignored.
@@ -247,8 +294,10 @@ printf '' >"$EXP"
 cmp -s "$TMP" "$EXP" || fail "off-no-reply"
 check_format off '#{pane_program_state}' ''
 
-# The pane-program-status hook runs for every applied report, including
-# clear, with the payload exposed as hook_program_* formats.
+# The pane-program-status hook runs for every report that changes a
+# record, including clear, with the payload exposed as hook_program_*
+# formats. A repeat of the same report, an ignored report and a clear that
+# matches nothing do not run it.
 $TMUX kill-server 2>/dev/null
 sleep 0.1
 $TMUX new-session -d -x 40 -y 5 -s hook "$INPUT_HOLD" || exit 1
@@ -256,7 +305,7 @@ $TMUX set -g @log '' || exit 1
 $TMUX set-hook -g pane-program-status \
     'set -gF @log "#{@log}|#{hook_program_state}:#{hook_program_kind}:#{hook_program_progress}:#{hook_program_app}:#{hook_program_msg}:#{hook_program_id}"' || exit 1
 $TMUX respawn-pane -k -t hook: \
-    "printf '\\033]7501;state=blocked:kind=auth:progress=5:app=cc:msg=aGk=:id=x\\033\\\\\\033]7501;state=snoozing\\033\\\\\\033]7501;state=clear:id=x\\033\\\\'; $INPUT_HOLD" || exit 1
+    "printf '\\033]7501;state=blocked:kind=auth:progress=5:app=cc:msg=aGk=:id=x\\033\\\\\\033]7501;state=blocked:kind=auth:progress=5:app=cc:msg=aGk=:id=x\\033\\\\\\033]7501;state=snoozing\\033\\\\\\033]7501;state=clear:id=y\\033\\\\\\033]7501;state=clear:id=x\\033\\\\'; $INPUT_HOLD" || exit 1
 sleep 0.5
 printf '%s\n' '|blocked:auth:5:cc:hi:x|clear:::::x' >"$EXP"
 $TMUX display-message -p '#{@log}' >"$TMP" 2>&1

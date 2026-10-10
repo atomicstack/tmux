@@ -1424,8 +1424,11 @@ input_esc_dispatch(struct input_ctx *ictx)
 	switch (entry->type) {
 	case INPUT_ESC_RIS:
 		colour_palette_clear(ictx->palette);
-		if (ictx->wp != NULL)
+		if (ictx->wp != NULL && ictx->wp->program_status_count != 0) {
 			program_status_free_all(ictx->wp);
+			server_redraw_window_borders(ictx->wp->window);
+			server_status_window(ictx->wp->window);
+		}
 		input_reset_cell(ictx);
 		screen_write_reset(sctx);
 		screen_write_fullredraw(sctx);
@@ -3436,8 +3439,10 @@ input_fire_program_status_event(struct window_pane *wp,
 			event_payload_set_string(ep, "program_title", "%s",
 			    ps->title);
 		}
-		if (ps->msg != NULL)
-			event_payload_set_string(ep, "program_msg", "%s", ps->msg);
+		if (ps->msg != NULL) {
+			event_payload_set_string(ep, "program_msg", "%s",
+			    ps->msg);
+		}
 	}
 
 	events_fire("pane-program-status", ep);
@@ -3541,6 +3546,19 @@ input_osc_7501(struct input_ctx *ictx, const char *p)
 
 	if (program_status_parse(p, &ps) != 0) {
 		log_debug("bad OSC 7501 %s", p);
+		return;
+	}
+
+	/*
+	 * A report still in the pty when the process exit was seen (SIGCHLD
+	 * arrives before the pty is drained) must not leave a working or
+	 * blocked record on a dead pane. Other states survive exit anyway.
+	 */
+	if ((wp->flags & PANE_EXITED) &&
+	    (ps.state == PROGRAM_STATUS_WORKING ||
+	    ps.state == PROGRAM_STATUS_BLOCKED)) {
+		log_debug("OSC 7501 %s after exit", p);
+		program_status_free(&ps);
 		return;
 	}
 	if (program_status_apply(wp, &ps)) {

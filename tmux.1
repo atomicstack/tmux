@@ -6518,6 +6518,8 @@ or
 state are dropped when the program exits or an OSC 133 shell prompt starts;
 all records are dropped by a full terminal reset (RIS) or when the pane is
 respawned.
+At most 256 records are kept for each pane; when a report would add another,
+the record updated least recently is dropped to make room.
 .Pp
 .It Xo Ic allow\-rename
 .Op Cm on | off
@@ -6768,8 +6770,9 @@ Run when a pane exits a mode.
 .It pane\-moved
 Run when a pane is moved to another window.
 .It pane\-program\-status
-Run when a pane reports its program status using the OSC 7501 escape
-sequence.
+Run when a program status report (OSC 7501) changes a record on a pane.
+A report that repeats the current record, or a clear that matches nothing,
+does not run it.
 .It pane\-prompt\-closed
 Run when a prompt in a pane is closed.
 .It pane\-prompt\-opened
