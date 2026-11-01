@@ -314,9 +314,10 @@ program_status_valid_id(const char *id)
 
 /*
  * Decode a base64 value of at most maxenc encoded and maxdec decoded bytes.
- * The text must be valid UTF-8 with no control characters (C0, DEL or C1)
- * and "#(" is neutered as for titles so it cannot reach #{E:}. Returns NULL
- * if the value is invalid or empty (*bad is set only when invalid).
+ * The text must be valid UTF-8 with no control characters at all (C0
+ * including tab and newline, DEL or C1), which is stricter than titles, and
+ * "#(" is neutered as for titles so it cannot reach #{E:}. Returns NULL if
+ * the value is invalid or empty (*bad is set only when invalid).
  */
 static char *
 program_status_decode(const char *value, size_t maxenc, size_t maxdec,
@@ -352,14 +353,17 @@ program_status_decode(const char *value, size_t maxenc, size_t maxdec,
 	}
 
 	/*
-	 * utf8_isvalid rejects C0 controls, DEL and invalid UTF-8 but stops at
-	 * an embedded NUL (also a control character) and accepts the C1
-	 * controls U+0080 to U+009F, which are 0xc2 followed by 0x80 to 0x9f
-	 * (0xc2 is only ever a lead byte in valid UTF-8).
+	 * utf8_isvalid rejects invalid UTF-8 and most C0 controls but allows
+	 * tab and newline, stops at an embedded NUL (also a control
+	 * character) and accepts the C1 controls U+0080 to U+009F, which are
+	 * 0xc2 followed by 0x80 to 0x9f (0xc2 is only ever a lead byte in
+	 * valid UTF-8). So check C0, DEL and C1 explicitly.
 	 */
 	if (strlen(out) != (size_t)outlen || !utf8_isvalid(out))
 		goto bad;
 	for (cp = out; *cp != '\0'; cp++) {
+		if ((u_char)cp[0] < 0x20 || (u_char)cp[0] == 0x7f)
+			goto bad;
 		if ((u_char)cp[0] == 0xc2 &&
 		    (u_char)cp[1] >= 0x80 && (u_char)cp[1] <= 0x9f)
 			goto bad;

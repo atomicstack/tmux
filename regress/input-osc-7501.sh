@@ -173,11 +173,12 @@ check_format ctrl '#{pane_program_state}' 'working'
 start_pane utf8 40 5 '\033]7501;state=done:msg=aMOpbGxv\033\\X\n'
 check_format utf8 '#{pane_program_msg}' 'héllo'
 
-# Decoded text gets the same treatment as titles: invalid UTF-8 (a lone
-# 0xff is /w==), a raw C1 byte ("a\x9bb" is YZti) and a C1 code point
-# encoded as UTF-8 ("a" U+009B "b" is YcKbYg==) discard the report, and
-# "#(" ("#(echo hi)" is IyhlY2hvIGhpKQ==) is neutered rather than left for
-# #{E:} to run.
+# Decoded text is checked like titles but more strictly: invalid UTF-8 (a
+# lone 0xff is /w==), a raw C1 byte ("a\x9bb" is YZti) and a C1 code point
+# encoded as UTF-8 ("a" U+009B "b" is YcKbYg==) discard the report, as do
+# the C0 controls tab and newline that titles allow (see the ctrl case
+# above), and "#(" ("#(echo hi)" is IyhlY2hvIGhpKQ==) is neutered rather
+# than left for #{E:} to run.
 start_pane sanitise 40 5 \
     '\033]7501;state=working\033\\\033]7501;state=done:msg=/w==\033\\\033]7501;state=done:title=YZti\033\\\033]7501;state=done:msg=YcKbYg==\033\\X\n'
 check_format sanitise '#{pane_program_state}' 'working'
